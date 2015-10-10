@@ -1,0 +1,397 @@
+---
+title: "FYP preliminary analyses"
+author: "Katie Cheng"
+date: "October 8, 2015"
+output: 
+  ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(reshape)
+library(reshape2)
+
+# load functions
+source("/Users/Katie/Desktop/Stanford/R/multiplot.R")
+source("/Users/Katie/Desktop/Stanford/R/summarySE.R")
+```
+
+## Contents
+
+- Histograms of data
+- Bar charts comparing group means
+- Correlations & scatterplots testing Ease x Utility
+- Models for Likelihood, as predicted by Ease & Utility
+
+
+```{r load_strategy_prompts, include=FALSE}
+
+longStrats = c(
+  "Go back and try to figure out something you're confused about in the readings for the class.",
+  "Skim new course material to see how it is organized before you study it thoroughly.", 
+  "Adjust the way you study in order to fit the course.", 
+  "Think through a topic and decide what you are supposed to learn from it before you read it.",
+  "Relate ideas you are learning in the course to those in other courses.", 
+  "Play around with ideas of your own related to what you are learning in the course.", 
+  "Write brief summaries of the main ideas from the readings and the concepts from the lectures.",
+  "Set goals for yourself in order to direct your activities in the study period."
+)
+
+shortStrats = c(
+  "figure_confused",
+  "skim_new",
+  "adjust_study",
+  "decide_learn",
+  "relate_courses",
+  "play_ideas",
+  "summarize_ideas",
+  "set_goals"
+)
+
+# code strategy dimensions
+prepare_act = as.factor(c(1, 0, 0, 0, 1, 1, 1, 0))
+open_clearstop = as.factor(c(1, 1, 0, 0, 0, 0, 1, 1))
+stratDimensions = data.frame(strategy = c(1:8), 
+                             shortStrats,
+                             longStrats,
+                             prepare_act, 
+                             open_clearstop)
+stratDimensions$strategy = as.factor(stratDimensions$strategy)
+levels(stratDimensions$prepare_act)[1:2] = c("prepare", "act")
+levels(stratDimensions$open_clearstop)[1:2] = c("open", "clearstop")
+stratDimensions$prepare_act_open_clearstop = paste(stratDimensions$prepare_act, "_", 
+                                                   stratDimensions$open_clearstop, sep="")
+stratDimensions
+
+```
+
+```{r wrangling, include=FALSE}
+
+# Wrangling raw CSV from Qualtrics
+
+# First, open the CSV and delete the second row (containing descriptive text)
+# Why? It messes up the data import
+
+# load data
+raw_data = read.csv("/Users/Katie/Desktop/Stanford/1st year project/3_FYP study/version_09-23-15_qualtrics/10-08-15_FYP_Effort_and_Utility_in_SRL2.csv")
+
+# inspect raw data
+# dplyr::glimpse(raw_data)
+
+# I don't currently do anything with this
+qual_data = dplyr::select(
+  raw_data,
+  matches("id"),
+  matches("ESA1"),
+  matches("ESA2"),
+  matches("USA1"),
+  matches("USA2"),
+  matches("C7Time_3"),
+  matches("SA1"),
+  matches("SA2"),
+  matches("^D.")
+)
+
+data = dplyr::select(
+  raw_data, 
+  matches("id"),
+  matches("^D."),
+  num_range("V", 8:9),
+  matches("C3Time_3"),
+  matches("ETime_3"),
+  matches("UTime_3"),
+  matches("LTime_3"),
+  matches("C7Time_3"),
+  num_range("E", 1:8),
+  num_range("U", 1:8),
+  num_range("L", 1:8)
+)
+
+# Edit survey start & end data:
+data = tidyr::separate(data, "V8", c("startDate", "startHour"), sep=" ")
+data = tidyr::separate(data, "V9", c("endDate", "endHour"), sep=" ")
+
+# Rename variables
+data = dplyr::rename(data, 
+                     REP_id = id,
+                     timeContext = C3Time_3,
+                     timeEase = ETime_3,
+                     timeUtility = UTime_3,
+                     timeLikelihood = LTime_3,
+                     timeShortAns = C7Time_3,
+                     age = D1,
+                     gender = D2,
+                     academicExp = D3,
+                     yearMiddle = D3a,
+                     yearHigh = D3b,
+                     yearCollege = D3c,
+                     yearCollegeTxt = D3c_TEXT,
+                     yearGrad = D3d,
+                     yearGradTxt = D3d_TEXT,
+                     taughtStudy = D4
+                     )
+
+### fix data ###
+
+# make EUL and taughtStudy into ordinal variables
+data = dplyr::mutate_each_(data, dplyr::funs(as.ordered(.)), names(data[-20:-1]))
+data$taughtStudy = as.ordered(data$taughtStudy)
+levels(data$taughtStudy) = c("strongly\ndisagree", "disagree", "somewhat\ndisagree", 
+                             "neither agree\nnor disagree", "somewhat\nagree", 
+                             "agree", "strongly\nagree")
+
+# add a pid
+data = cbind("pid" = seq.int(nrow(data)), data)
+
+# turn age from string into an integer
+data = tidyr::separate(data, age, c("age", "extra"), sep=2)
+data$age = as.integer(data$age)
+data$extra = NULL
+
+# make an ageCat variable (note: unevenly distributed bins)
+data$ageCat = as.factor(findInterval(data$age, c(16, 21, 26)))
+levels(data$ageCat)[1:4] = c("11-15", "16-20", "21-25", "26 & up")
+
+# name levels gender
+data$gender = as.factor(data$gender)
+levels(data$gender)[1:2] = c("male", "female")
+
+## fix the academic years shenanigans ##
+
+# merge yearCollege and yearCollegeTxt
+data$yearCollegeMC = data$yearCollege
+data$yearCollege = data$yearCollegeTxt
+data$yearCollegeTxt = NULL
+
+# merge yearGrad and yearGradTxt
+data$yearGradMC = data$yearGrad
+data$yearGrad = data$yearGradTxt
+data$yearGradTxt = NULL
+
+# privileging text responses over MC responses
+for (i in 1:nrow(data)) {
+  if (is.na(data$yearCollege[i])) {
+    data$yearCollege[i] = data$yearCollegeMC[i]
+  } 
+  if (is.na(data$yearGrad[i])) {
+    data$yearGrad[i] = data$yearGradMC[i]
+  }
+}
+
+data$yearCollegeMC = NULL
+data$yearGradMC = NULL
+
+# merge all years
+# +1 for K, +5 for 1:5, +3 for 6:8, +4 for 9:12, +4 for Frosh-Senior
+for (i in 1:nrow(data)) {
+  if (is.na(data$academicExp[i])) {
+    # do nothing
+  }
+  else if (data$academicExp[i] == 1) {
+    # middle school
+    data$acadExpYears[i] = 1 + 5 + data$yearMiddle[i]
+  } else if (data$academicExp[i] == 2) {
+    # high school
+    data$acadExpYears[i] = 1 + 5 + 3 + data$yearHigh[i]
+  } else if (data$academicExp[i] == 3) {
+    # undergrad
+    data$acadExpYears[i] = 1 + 5 + 3 + 4 + data$yearCollege[i]
+  } else if (data$academicExp[i] == 4) {
+    # grad
+    data$acadExpYears[i] = 1 + 5 + 3 + 4 + 4 + data$yearGrad[i]
+  }
+}
+
+data$yearMiddle = NULL
+data$yearHigh = NULL
+data$yearCollege = NULL
+data$yearGrad = NULL
+
+# name academicExp levels
+data$academicExp = as.factor(data$academicExp)
+levels(data$academicExp)[1:4] = c("middle", "high", "college", "grad")
+
+# melt data into long vector
+melt_data = melt(data, id=c(
+  "pid", "REP_id", "age", "ageCat", "gender", "academicExp", "acadExpYears", "taughtStudy",
+  "startDate", "startHour", "endDate", "endHour", "timeContext", "timeEase", "timeUtility",
+  "timeLikelihood", "timeShortAns"))
+
+melt_data = tidyr::separate(melt_data, variable, c("EUL", "strategy"), sep=1)
+melt_data$strategy = as.integer(melt_data$strategy)
+
+# fix variable types in melted data
+melt_data$taughtStudy = as.ordered(melt_data$taughtStudy)
+melt_data$EUL = as.factor(melt_data$EUL)
+melt_data$EUL = factor(melt_data$EUL, levels = c("E", "U", "L"))
+melt_data$strategy = as.factor(melt_data$strategy)
+melt_data$value = as.ordered(melt_data$value)
+melt_data = dplyr::rename(melt_data, rating = value)
+
+# add an index
+melt_data = cbind("index" = seq.int(nrow(melt_data)), melt_data)
+
+dplyr::glimpse(melt_data)
+
+# remove items where the participant didn't rate E, U, and L on the strategy
+to_delete = NULL
+for (i in 1:nrow(melt_data)) {
+  if (is.na(melt_data$rating[i])) {
+
+    participant_id = melt_data$pid[i]
+    incomplete_strategy = melt_data$strategy[i]
+
+    delete_rows = as.vector(dplyr::filter(
+      melt_data,
+      pid==participant_id & strategy==incomplete_strategy)$index)
+
+    to_delete = c(to_delete, delete_rows)
+  }
+}
+
+melt_data = melt_data[-unique(to_delete), ]
+
+# redo the index now that rows have been deleted
+melt_data$index = seq.int(nrow(melt_data))
+
+# add strategy dimensions
+melt_data = dplyr::left_join(melt_data, stratDimensions, by="strategy")
+
+# inspect data
+dplyr::glimpse(melt_data)
+
+```
+
+
+## | "I study the way that I do because a teacher (or teachers) taught me to study that way."
+
+```{r hist_taughtStudy}
+
+dfTaught = data.frame(taughtStudy = na.omit(data$taughtStudy))
+
+ggplot(dfTaught, aes(x = taughtStudy)) +
+  geom_histogram(color='black',
+                 fill='lightgrey',
+                 binwidth=1,
+                 breaks=c(0.5:7.5)) +
+  theme_bw()
+
+```
+
+
+## Time on task: Reading context
+```{r hist_time_context}
+
+dftimeContext = data.frame(timeContext = na.omit(data$timeContext))
+
+ggplot(dftimeContext, aes(x = dftimeContext$timeContext)) +
+  geom_histogram(aes(y=..density..), # ..density.. normalizes the y axis to counts/total
+                 color='darkgrey',
+                 fill='lightgrey',
+                 binwidth=1) +
+                 # breaks=c(0.5:7.5)) + 
+  geom_density(alpha=0.2,
+               fill='lightgrey',
+               adjust=3) +
+  xlab("milliseconds") +
+  theme_bw()
+
+```
+
+## Time on task: Doing Ease likert rating & short answers
+```{r hist_time_ease}
+
+dftimeEase = data.frame(timeEase = na.omit(data$timeEase))
+
+ggplot(dftimeEase, aes(x = dftimeEase$timeEase/100)) +
+  geom_histogram(aes(y=..density..), # ..density.. normalizes the y axis to counts/total
+                 color='darkgrey',
+                 fill='lightgrey',
+                 binwidth=1) +
+                 # breaks=c(0.5:7.5)) + 
+  geom_density(alpha=0.2,
+               fill='lightgrey',
+               adjust=3) +
+  xlab("seconds") +
+  theme_bw()
+
+```
+
+## Time on task: Doing Utility likert rating & short answers
+```{r hist_time_utility}
+
+dftimeUtility = data.frame(timeUtility = na.omit(data$timeUtility))
+
+ggplot(dftimeUtility, aes(x = dftimeUtility$timeUtility/100)) +
+  geom_histogram(aes(y=..density..), # ..density.. normalizes the y axis to counts/total
+                 color='darkgrey',
+                 fill='lightgrey',
+                 binwidth=1) +
+                 # breaks=c(0.5:7.5)) + 
+  geom_density(alpha=0.2,
+               fill='lightgrey',
+               adjust=3) +
+  xlab("seconds") +
+  theme_bw()
+
+```
+
+## Time on task: Doing Likelihood likert rating
+```{r hist_time_likelihood}
+
+dftimeLikelihood = data.frame(timeLikelihood = na.omit(data$timeLikelihood))
+
+ggplot(dftimeLikelihood, aes(x = dftimeLikelihood$timeLikelihood/100)) +
+  geom_histogram(aes(y=..density..), # ..density.. normalizes the y axis to counts/total
+                 color='darkgrey',
+                 fill='lightgrey',
+                 binwidth=1) +
+                 # breaks=c(0.5:7.5)) + 
+  geom_density(alpha=0.2,
+               fill='lightgrey',
+               adjust=3) +
+  xlab("seconds") +
+  theme_bw()
+
+```
+
+## Time on task: Doing short answer descriptions of study strategies
+```{r hist_time_sa}
+
+dftimeShortAns = data.frame(timeShortAns = na.omit(data$timeShortAns))
+
+ggplot(dftimeShortAns, aes(x = dftimeShortAns$timeShortAns/100)) +
+  geom_histogram(aes(y=..density..), # ..density.. normalizes the y axis to counts/total
+                 color='darkgrey',
+                 fill='lightgrey',
+                 binwidth=1) +
+                 # breaks=c(0.5:7.5)) + 
+  geom_density(alpha=0.2,
+               fill='lightgrey',
+               adjust=3) +
+  xlab("seconds") +
+  theme_bw()
+
+```
+
+## Slide with R Output
+```{r showsup, include=FALSE}
+#test
+summary(cars)
+```
+
+```{r cars, echo = TRUE}
+summary(cars)
+```
+
+## Slide with Plot
+
+```{r pressure}
+plot(pressure)
+```
+

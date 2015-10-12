@@ -1,15 +1,21 @@
 ---
-title: "FYP preliminary analyses"
+title: "FYP analyses"
 author: "Katie Cheng"
 date: "October 8, 2015"
 output: 
-  ioslides_presentation
+  html_document:
+    highlight: pygments
+    theme: flatly
+    toc: yes
+  pdf_document:
+    toc: yes
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 
 # load libraries
+library(plyr)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -19,6 +25,9 @@ library(reshape2)
 # load functions
 source("/Users/Katie/Desktop/Stanford/R/multiplot.R")
 source("/Users/Katie/Desktop/Stanford/R/summarySE.R")
+
+# set defaults
+options(digits = 3)
 ```
 
 ## Contents
@@ -138,12 +147,11 @@ data = dplyr::rename(data,
 
 ### fix data ###
 
-# make EUL and taughtStudy into ordinal variables
-data = dplyr::mutate_each_(data, dplyr::funs(as.ordered(.)), names(data[-20:-1]))
+# make taughtStudy into ordinal variable
 data$taughtStudy = as.ordered(data$taughtStudy)
-levels(data$taughtStudy) = c("strongly\ndisagree", "disagree", "somewhat\ndisagree", 
-                             "neither agree\nnor disagree", "somewhat\nagree", 
-                             "agree", "strongly\nagree")
+levels(data$taughtStudy) = c("strongly disagree", "disagree", "sw disagree", 
+                             "neither agree nor disagree", "sw agree", 
+                             "agree", "strongly agree")
 
 # add a pid
 data = cbind("pid" = seq.int(nrow(data)), data)
@@ -191,8 +199,8 @@ data$yearGradMC = NULL
 for (i in 1:nrow(data)) {
   if (is.na(data$academicExp[i])) {
     # do nothing
-  }
-  else if (data$academicExp[i] == 1) {
+    data$acadExpYears[i] = data$academicExp[i]
+  } else if (data$academicExp[i] == 1) {
     # middle school
     data$acadExpYears[i] = 1 + 5 + data$yearMiddle[i]
   } else if (data$academicExp[i] == 2) {
@@ -214,9 +222,11 @@ data$yearGrad = NULL
 
 # name academicExp levels
 data$academicExp = as.factor(data$academicExp)
-levels(data$academicExp)[1:4] = c("middle", "high", "college", "grad")
+plyr::mapvalues(data$academicExp, from = c(1, 2, 3, 4), 
+          to = c("middle", "high", "college", "grad"))
 
-# melt data into long vector
+### MELT DATA into long vector###
+
 melt_data = melt(data, id=c(
   "pid", "REP_id", "age", "ageCat", "gender", "academicExp", "acadExpYears", "taughtStudy",
   "startDate", "startHour", "endDate", "endHour", "timeContext", "timeEase", "timeUtility",
@@ -230,13 +240,10 @@ melt_data$taughtStudy = as.ordered(melt_data$taughtStudy)
 melt_data$EUL = as.factor(melt_data$EUL)
 melt_data$EUL = factor(melt_data$EUL, levels = c("E", "U", "L"))
 melt_data$strategy = as.factor(melt_data$strategy)
-melt_data$value = as.ordered(melt_data$value)
 melt_data = dplyr::rename(melt_data, rating = value)
 
 # add an index
 melt_data = cbind("index" = seq.int(nrow(melt_data)), melt_data)
-
-dplyr::glimpse(melt_data)
 
 # remove items where the participant didn't rate E, U, and L on the strategy
 to_delete = NULL
@@ -262,15 +269,404 @@ melt_data$index = seq.int(nrow(melt_data))
 # add strategy dimensions
 melt_data = dplyr::left_join(melt_data, stratDimensions, by="strategy")
 
-# inspect data
+
+### put all ease, all utility, and all likelihood into columns ###
+
+EUL_data = tidyr::gather(data, "item", "rating", 16:39)
+EUL_data = tidyr::separate(EUL_data, item, c("EUL", "strategy"), 1)
+EUL_data = tidyr::spread(EUL_data, EUL, rating)
+EUL_data = data.frame(EUL_data[1:19], EUL_data[21], EUL_data[20])
+
+# rename columns
+EUL_data = dplyr::rename(EUL_data, ease = E)
+EUL_data = dplyr::rename(EUL_data, utility = U)
+EUL_data = dplyr::rename(EUL_data, likelihood = L)
+
+```
+
+```{r make_ordinal}
+
+# can toggle on/off
+
+# data = dplyr::mutate_each_(data, dplyr::funs(as.ordered(.)), names(data[-20:-1]))
+# melt_data$rating = as.ordered(melt_data$rating)
+
+```
+
+```{r check_out_data}
+
+dplyr::glimpse(data)
 dplyr::glimpse(melt_data)
+dplyr::glimpse(EUL_data)
+
+```
+
+Test within-individual EU correlations
+--------------------------------------
+
+```{r within_indiv_EU_corr, include=FALSE}
+
+# create a new column in data to store EU correlations
+data['indivCorEU'] = NA
+
+for (pid in 1:nrow(data)) {
+  eVec = NULL
+  uVec = NULL
+  for (strat in 1:8) {
+    e = data[pid, 15+strat]
+    u = data[pid,23+strat]
+    
+    if (!is.na(e) & !is.na(u)) {
+      eVec = c(eVec, e)
+      uVec = c(uVec, u)
+    }
+    if (length(eVec)>2 & length(uVec)>2 &
+        sd(eVec)>0 & sd(uVec)>0) {
+      corEU = cor.test(eVec, uVec)$estimate
+      data$indivCorEU[pid] = corEU
+    } 
+  }
+}
+
+```
+
+### All groups
+```{r indivCorEU_all}
+
+summary(data[,'indivCorEU'][!is.na(data$indivCorEU)])
+corEU = t.test(data[,'indivCorEU'][!is.na(data$indivCorEU)])
+
+```
+To test the null hypothesis that the mean correlation between ease and utility was equal to 0, we conducted t-tests. The result of the t-test shows that the mean `r corEU$estimate` was significantly different from 0 at a p<0.001 level t(`r corEU$parameter`) = `r corEU$statistic`, *p*=`r corEU$p.value`. This means that on average, there was a positive correlation between ease and utility for all participants.
+
+
+### By `ageCat`
+```{r indivCorEU_by_ageCat}
+
+data_split_ageCat = split(data, data$ageCat)
+
+corEU_11_15 = t.test(data_split_ageCat$`11-15`$indivCorEU)
+corEU_16_20 = t.test(data_split_ageCat$`16-20`$indivCorEU)
+corEU_21_25 = t.test(data_split_ageCat$`21-25`$indivCorEU)
+corEU_26_up = t.test(data_split_ageCat$`26 & up`$indivCorEU)
+
+corEU_by_ageCat = aov(indivCorEU ~ ageCat, data = data)
+summary(corEU_by_ageCat)
+TukeyHSD(corEU_by_ageCat)
+
+```
+To test the null hypotheses that the mean correlations were equal to 0, we conducted t-tests. 
+The result of the t-test for people of age `11-15` shows that the mean `r corEU_11_15$estimate` was not significantly different from 0 at a p<0.05 level t(`r corEU_11_15$parameter`) = `r corEU_11_15$statistic`, *p*=`r corEU_11_15$p.value`. This means that on average, there was no correlation between ease and utility for `11-15` year olds.
+
+The result of the t-test for people of age `16-20` shows that the mean `r corEU_16_20$estimate` was significantly different from 0 at a p<0.001 level t(`r corEU_16_20$parameter`) = `r corEU_16_20$statistic`, *p*=`r corEU_16_20$p.value`. This means that on average, there was a significant positive correlation between ease and utility for `16-20` year olds.
+
+The result of the t-test for people of age `21-26` shows that the mean `r corEU_21_25$estimate` was significantly different from 0 at a p<0.001 level t(`r corEU_21_25$parameter`) = `r corEU_21_25$statistic`, *p*=`r corEU_21_25$p.value`. This means that on average, there was a significant positive correlation between ease and utility for `21-26` year olds.
+
+The result of the t-test for people of age `26 & up` shows that the mean `r corEU_26_up$estimate` was significantly different from 0 at a p<0.001 level t(`r corEU_26_up$parameter`) = `r corEU_26_up$statistic`, *p*=`r corEU_26_up$p.value`. This means that on average, there was a significant positive correlation between ease and utility for people of age `26 & up`.
+
+To test the relationship between `ageCat` and `indivCorEU`, we fit an analysis of variance model. The model was significant at a *p*<0.05 level, F(`r summary(corEU_by_ageCat)[[1]][["Df"]][1]`) = `r summary(corEU_by_ageCat)[[1]][["F value"]][1]`, *p*=`r summary(corEU_by_ageCat)[[1]][["Pr(>F)"]][1]`. In other words, there is a significant relationship between age-category and mean correlation between ease and utility.
+
+To test whether there were significant differences between pairs of groups, we conducted a  Tukey Honest Significant Differences test. There was a marginally significant difference in correlations diff=`r TukeyHSD(corEU_by_ageCat)[[1]][[2,1]]` between `21-25` and `11-15` year olds at a p<0.05 level, *p*=`r TukeyHSD(corEU_by_ageCat)[[1]][[2,4]]`, but no significant differences between any other pairs of age-categories. 
+
+### By `academicExp` (middle vs. high vs. college vs. grad)
+```{r indivCorEU_by_academicExp}
+
+data_split_academicExp = split(data, data$academicExp)
+
+# currently have no middle schoolers
+# corEU_middle = t.test(data_split_academicExp$`1`$indivCorEU)
+
+corEU_high = t.test(data_split_academicExp$`2`$indivCorEU)
+corEU_college = t.test(data_split_academicExp$`3`$indivCorEU)
+corEU_grad = t.test(data_split_academicExp$`4`$indivCorEU)
+
+corEU_by_academicExp = aov(indivCorEU ~ academicExp, data = data)
+summary(corEU_by_academicExp)
+TukeyHSD(corEU_by_academicExp)
+
+```
+**ADD INTERPRETATION LATER**
+
+### Same thing without strategy #1
+```{r within_indiv_EU_corr_wo1, include=FALSE}
+
+# create a new column in data to store EU correlations
+data['indivCorEUwo1'] = NA
+
+for (pid in 1:nrow(data)) {
+  eVec = NULL
+  uVec = NULL
+  for (strat in 2:8) {
+    e = data[pid, 15+strat]
+    u = data[pid,23+strat]
+    
+    if (!is.na(e) & !is.na(u)) {
+      eVec = c(eVec, e)
+      uVec = c(uVec, u)
+    }
+    if (length(eVec)>2 & length(uVec)>2 &
+        sd(eVec)>0 & sd(uVec)>0) {
+      corEU = cor.test(eVec, uVec)$estimate
+      data$indivCorEUwo1[pid] = corEU
+    } 
+  }
+}
+
+# all 
+summary(data[,'indivCorEUwo1'][!is.na(data$indivCorEUwo1)])
+corEUwo1 = t.test(data[,'indivCorEUwo1'][!is.na(data$indivCorEUwo1)])
+
+# by ageCat
+data_split_ageCat = split(data, data$ageCat)
+
+corEU_11_15_wo1 = t.test(data_split_ageCat$`11-15`$indivCorEUwo1)
+corEU_16_20_wo1 = t.test(data_split_ageCat$`16-20`$indivCorEUwo1)
+corEU_21_25_wo1 = t.test(data_split_ageCat$`21-25`$indivCorEUwo1)
+corEU_26_up_wo1 = t.test(data_split_ageCat$`26 & up`$indivCorEUwo1)
+
+corEU_by_ageCat_wo1 = aov(indivCorEUwo1 ~ ageCat, data = data)
+summary(corEU_by_ageCat_wo1)
+TukeyHSD(corEU_by_ageCat_wo1)
+
+# by academicExp
+data_split_academicExp = split(data, data$academicExp)
+
+corEU_high_wo1 = t.test(data_split_academicExp$`2`$indivCorEUwo1)
+corEU_college_wo1 = t.test(data_split_academicExp$`3`$indivCorEUwo1)
+corEU_grad_wo1 = t.test(data_split_academicExp$`4`$indivCorEUwo1)
+
+corEU_by_academicExp_wo1 = aov(indivCorEUwo1 ~ academicExp, data = data)
+summary(corEU_by_academicExp_wo1)
+TukeyHSD(corEU_by_academicExp_wo1)
+
+```
+
+## Plot strategies, colored by open_clstop, by `ageCat`
+```{r plot_strats_colorOC_by_ageCat, fig.width=10, fig.height=10}
+
+summary_PO = summarySE(melt_data, measurevar="rating", groupvars=c('strategy', 'EUL', 'prepare_act', 'open_clearstop', 'ageCat'))
+
+#11-15
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & ageCat=="11-15")
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & ageCat=="11-15")
+
+ggplot(dplyr::filter(summary_PO, ageCat=="11-15"), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "age 11-15")
+
+# 16-20
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & ageCat=="16-20")
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & ageCat=="16-20")
+
+ggplot(dplyr::filter(summary_PO, ageCat=="16-20"), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "age 16-20")
+
+# 21-25
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & ageCat=="21-25")
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & ageCat=="21-25")
+
+ggplot(dplyr::filter(summary_PO, ageCat=="21-25"), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "age 21-25")
+
+# 26 & up
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & ageCat=="26 & up")
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & ageCat=="26 & up")
+
+ggplot(dplyr::filter(summary_PO, ageCat=="26 & up"), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "age 26 & up")
+
+```
+
+## Plot strategies, colored by open_clstop, by `academicExp`
+```{r plot_strats_colorOC_by_ageCat, fig.width=10, fig.height=10}
+
+summary_PO = summarySE(melt_data, measurevar="rating", groupvars=c('strategy', 'EUL', 'prepare_act', 'open_clearstop', 'academicExp'))
+
+# high
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & academicExp==2)
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & academicExp==2)
+
+ggplot(dplyr::filter(summary_PO, academicExp==2), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "high school")
+
+# college
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & academicExp==3)
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & academicExp==3)
+
+ggplot(dplyr::filter(summary_PO, academicExp==3), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "college")
+
+# grad
+filter_ease = dplyr::filter(summary_PO, EUL=="E" & academicExp==4)
+filter_utility = dplyr::filter(summary_PO, EUL=="U" & academicExp==4)
+
+ggplot(dplyr::filter(summary_PO, academicExp==4), aes(x=filter_ease$rating, 
+                       y=filter_utility$rating, colour=filter_ease$open_clearstop)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = filter_utility$rating - filter_utility$ci, 
+                    ymax = filter_utility$rating + filter_utility$ci)) +
+  geom_errorbarh(aes(xmin = filter_ease$rating - filter_ease$ci, 
+                     xmax = filter_ease$rating + filter_ease$ci)) +
+  geom_text(aes(label=filter_ease$strategy, hjust=1.5, vjust=1.5)) + 
+  labs(title = "grad school")
 
 ```
 
 
-## | "I study the way that I do because a teacher (or teachers) taught me to study that way."
+```{r lme_model_EUL}
+# Number of Observations: 1056
 
-```{r hist_taughtStudy}
+# predicting likelihood with scaled ease
+ease_model = nlme::lme(likelihood ~ scale(ease), 
+                       random = ~1 | pid, 
+                       data = dplyr::filter(EUL_data, !is.na(likelihood)))
+summary(ease_model)
+
+# predicting likelihood with scaled utility
+utility_model = nlme::lme(likelihood ~ scale(utility), 
+                          random = ~1 | pid, 
+                          data = dplyr::filter(EUL_data, !is.na(likelihood)))
+summary(utility_model)
+
+# predicting likelihood with scaled ease & utility
+add_model = nlme::lme(likelihood ~ scale(ease) + scale(utility), 
+                      random = ~1 | pid, 
+                      data = dplyr::filter(EUL_data, !is.na(likelihood)))
+summary(add_model)
+
+# predicting likelihood with the interaction of scaled ease & utility
+interact_model = nlme::lme(likelihood ~ scale(ease) * scale(utility), 
+                           random = ~1 | pid, 
+                           data = dplyr::filter(EUL_data, !is.na(likelihood)))
+summary(interact_model)
+
+# anova to compare models
+anova(ease_model, utility_model, add_model, interact_model)
+
+```
+
+```{r lme_model_EUL_age}
+
+# repeat of prior codeblock, this time with age in the model (which changes the max number of observations we can use in the model)
+
+# Number of Observations: 1040
+
+ease_model2 = nlme::lme(likelihood ~ scale(ease), 
+                       random = ~1 | pid, 
+                       data = dplyr::filter(EUL_data, !is.na(age)))
+
+utility_model2 = nlme::lme(likelihood ~ scale(utility), 
+                          random = ~1 | pid, 
+                          data = dplyr::filter(EUL_data, !is.na(age)))
+
+add_model2 = nlme::lme(likelihood ~ scale(ease) + scale(utility), 
+                      random = ~1 | pid, 
+                      data = dplyr::filter(EUL_data, !is.na(age)))
+
+interact_model2 = nlme::lme(likelihood ~ scale(ease) * scale(utility), 
+                           random = ~1 | pid, 
+                           data = dplyr::filter(EUL_data, !is.na(age)))
+
+interact_age_model = nlme::lme(likelihood ~ scale(ease) * scale(utility) + age, 
+                           random = ~1 | pid, 
+                           data = dplyr::filter(EUL_data, !is.na(age)))
+summary(interact_age_model)
+
+# anova to compare models
+anova(ease_model2, utility_model2, add_model2, interact_model2, interact_age_model)
+
+```
+
+```{r lme_model_EUL_acadExpYears}
+
+# repeat of prior codeblock, this time with academic experience in years in the model (which changes the max number of observations we can use in the model)
+
+# less significant than age
+
+# Number of Observations: 1016
+# Number of Groups: 127 (participants)
+
+filtered_data = dplyr::filter(dplyr::filter(EUL_data, !is.na(academicExp)),
+                              !is.na(acadExpYears))
+
+ease_model3 = nlme::lme(likelihood ~ scale(ease), 
+                       random = ~1 | pid, 
+                       data = filtered_data)
+
+utility_model3 = nlme::lme(likelihood ~ scale(utility), 
+                          random = ~1 | pid, 
+                          data = filtered_data)
+
+add_model3 = nlme::lme(likelihood ~ scale(ease) + scale(utility), 
+                      random = ~1 | pid, 
+                      data = filtered_data)
+
+interact_model3 = nlme::lme(likelihood ~ scale(ease) * scale(utility), 
+                           random = ~1 | pid, 
+                           data = filtered_data)
+
+interact_acadExpYears_model = nlme::lme(likelihood ~ scale(ease) * scale(utility) + acadExpYears, 
+                           random = ~1 | pid, 
+                           data = filtered_data)
+summary(interact_acadExpYears_model)
+
+# anova to compare models
+anova(ease_model3, utility_model3, add_model3, interact_model3, interact_acadExpYears_model)
+
+```
+
+
+
+
+
+
+
+
+
+## "I study the way that I do because a teacher (or teachers) taught me to study that way."
+
+```{r hist_taughtStudy, fig.width=10, fig.height=6}
 
 dfTaught = data.frame(taughtStudy = na.omit(data$taughtStudy))
 
@@ -285,7 +681,7 @@ ggplot(dfTaught, aes(x = taughtStudy)) +
 
 
 ## Time on task: Reading context
-```{r hist_time_context}
+```{r hist_time_context, fig.width=10, fig.height=6}
 
 dftimeContext = data.frame(timeContext = na.omit(data$timeContext))
 
@@ -304,7 +700,7 @@ ggplot(dftimeContext, aes(x = dftimeContext$timeContext)) +
 ```
 
 ## Time on task: Doing Ease likert rating & short answers
-```{r hist_time_ease}
+```{r hist_time_ease, fig.width=10, fig.height=6}
 
 dftimeEase = data.frame(timeEase = na.omit(data$timeEase))
 
@@ -323,7 +719,7 @@ ggplot(dftimeEase, aes(x = dftimeEase$timeEase/100)) +
 ```
 
 ## Time on task: Doing Utility likert rating & short answers
-```{r hist_time_utility}
+```{r hist_time_utility, fig.width=10, fig.height=6}
 
 dftimeUtility = data.frame(timeUtility = na.omit(data$timeUtility))
 
@@ -342,7 +738,7 @@ ggplot(dftimeUtility, aes(x = dftimeUtility$timeUtility/100)) +
 ```
 
 ## Time on task: Doing Likelihood likert rating
-```{r hist_time_likelihood}
+```{r hist_time_likelihood, fig.width=10, fig.height=6}
 
 dftimeLikelihood = data.frame(timeLikelihood = na.omit(data$timeLikelihood))
 
@@ -361,7 +757,7 @@ ggplot(dftimeLikelihood, aes(x = dftimeLikelihood$timeLikelihood/100)) +
 ```
 
 ## Time on task: Doing short answer descriptions of study strategies
-```{r hist_time_sa}
+```{r hist_time_sa, fig.width=10, fig.height=6}
 
 dftimeShortAns = data.frame(timeShortAns = na.omit(data$timeShortAns))
 
